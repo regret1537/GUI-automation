@@ -1,0 +1,12 @@
+pyautogui>=0.9.54
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+pywinctl>=0.3          # 視窗鎖定功能用；Windows/macOS/Linux(X11) 支援，不支援 Wayland
+
+# tkinter 是 Python 標準庫的一部分，但很多 Linux 發行版把它拆成獨立系統套件，
+# 不是用 pip 裝，而是:
+#   Ubuntu/Debian:  sudo apt-get install python3-tk
+#   Fedora:         sudo dnf install python3-tkinter
+#   macOS (brew):   brew install python-tk
+#   Windows:        官方安裝程式預設已包含，通常不需要額外處理

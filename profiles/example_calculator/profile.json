@@ -1,0 +1,39 @@
+{
+  "name": "範例：桌面計算機 1+2=3（示意用，需要你自己補上實際座標與錨點截圖）",
+  "coordinates": {
+    "btn_1": {"x": 0, "y": 0, "note": "計算機的按鈕「1」— 請用分頁①實際錄製，這裡只是佔位"},
+    "btn_plus": {"x": 0, "y": 0, "note": "按鈕「+」"},
+    "btn_2": {"x": 0, "y": 0, "note": "按鈕「2」"},
+    "btn_equals": {"x": 0, "y": 0, "note": "按鈕「=」"},
+    "btn_clear": {"x": 0, "y": 0, "note": "按鈕「C」清除"}
+  },
+  "states": {
+    "idle": {
+      "match_mode": "any",
+      "anchors": [
+        {"template_path": "templates/calc_idle_display.png", "region": null, "confidence": 0.85}
+      ],
+      "on_enter_actions": [
+        {"type": "click", "coord_label": "btn_clear"},
+        {"type": "wait", "seconds": 0.3},
+        {"type": "click", "coord_label": "btn_1"},
+        {"type": "click", "coord_label": "btn_plus"},
+        {"type": "click", "coord_label": "btn_2"},
+        {"type": "click", "coord_label": "btn_equals"},
+        {"type": "wait", "seconds": 1.0}
+      ]
+    },
+    "result_shown": {
+      "match_mode": "any",
+      "anchors": [
+        {"template_path": "templates/calc_result_3.png", "region": null, "confidence": 0.9}
+      ],
+      "on_enter_actions": [
+        {"type": "wait", "seconds": 1.0},
+        {"type": "click", "coord_label": "btn_clear"}
+      ]
+    }
+  },
+  "state_priority": ["result_shown", "idle"],
+  "loop_interval_seconds": 1.0
+}
