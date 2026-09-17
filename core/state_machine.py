@@ -17,6 +17,7 @@ from core.state_detector import StateDetector, StateDef, Anchor
 from core.action_executor import ActionExecutor, ActionAbort
 from core.event_classifier import EventClassifier
 from core.window_manager import WindowManager
+from core import brightness_detector
 from core import win32_backend
 
 
@@ -63,6 +64,15 @@ class StateMachine:
             )
         self._priority = profile.get("state_priority") or list(self._states.keys())
         self._loop_interval = profile.get("loop_interval_seconds", 1.0)
+        self._brightness_triggers = [
+            trigger for trigger in profile.get("brightness_triggers", [])
+            if trigger.get("enabled", True)
+        ]
+        started_at = time.monotonic()
+        self._brightness_runtime = [
+            {"last_run": started_at, "has_run": False, "last_bright": False}
+            for _ in self._brightness_triggers
+        ]
 
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -93,6 +103,65 @@ class StateMachine:
                 act["coord"] = list(xy)
             resolved.append(act)
         return resolved
+
+    def _sample_trigger_brightness(self, trigger: dict, background_frame=None):
+        label = trigger.get("watch_coord_label", "")
+        xy = self.coords.resolve(label, self.current_window_rect)
+        if xy is None:
+            if self.logger:
+                self.logger.warn(f"亮度觸發器找不到偵測座標: {label}")
+            return None
+        radius = int(trigger.get("radius", 3))
+        if background_frame is not None:
+            return brightness_detector.sample_frame(
+                background_frame, xy[0], xy[1], radius, self.current_window_rect
+            )
+        return brightness_detector.sample_screen(xy[0], xy[1], radius)
+
+    def _run_brightness_triggers(self):
+        if not self._brightness_triggers:
+            return
+        background_frame = None
+        if self.execution_mode == "win32_background":
+            hwnd = self._get_target_handle()
+            background_frame = win32_backend.capture_window(hwnd) if hwnd else None
+            if background_frame is None:
+                if self.logger:
+                    self.logger.warn("亮度觸發器無法取得背景畫面")
+                return
+
+        now = time.monotonic()
+        for index, trigger in enumerate(self._brightness_triggers):
+            value = self._sample_trigger_brightness(trigger, background_frame)
+            if value is None:
+                continue
+            runtime = self._brightness_runtime[index]
+            threshold = float(trigger.get("threshold", 180))
+            bright = value >= threshold
+            elapsed = now - runtime["last_run"]
+            cooldown = max(0.05, float(trigger.get("cooldown_seconds", 1.0)))
+            force_after = max(0.0, float(trigger.get("force_after_seconds", 0.0)))
+            reason = None
+            if bright and (not runtime["has_run"] or elapsed >= cooldown):
+                reason = "偵測到發亮"
+            elif not bright and force_after > 0 and elapsed >= force_after:
+                reason = f"未發亮已超過 {force_after:g} 秒"
+
+            runtime["last_bright"] = bright
+            if not reason:
+                continue
+            actions = self._resolve_actions(trigger.get("actions", []))
+            if not actions:
+                continue
+            self.executor.run_sequence(actions)
+            runtime["last_run"] = time.monotonic()
+            runtime["has_run"] = True
+            self.action_count += len(actions)
+            if self.logger:
+                name = trigger.get("name") or f"觸發器 {index + 1}"
+                self.logger.event(
+                    f"亮度觸發「{name}」: {reason}（目前亮度 {value:.1f} / 門檻 {threshold:g}）"
+                )
 
     # ---- 主迴圈 ----
     def _run_loop(self):
@@ -140,13 +209,25 @@ class StateMachine:
                 if self.activate_before_action and self.execution_mode != "win32_background":
                     self.window_manager.activate(self.window_title_substring)
 
+            try:
+                self._run_brightness_triggers()
+            except ActionAbort:
+                break
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"亮度觸發器執行失敗: {e}")
+
+            if not self._states:
+                time.sleep(self._loop_interval)
+                continue
+
             state_name = self.detector.detect_state(self._states, self._priority, self.current_window_rect)
 
             if state_name is None:
                 consecutive_unknown += 1
                 if self.logger:
                     self.logger.warn(f"目前畫面無法辨識任何已知狀態 (連續 {consecutive_unknown} 次)")
-                if consecutive_unknown >= 5:
+                if consecutive_unknown >= 5 and not self._brightness_triggers:
                     if self.logger:
                         self.logger.error("連續多次無法辨識狀態，暫停執行，請人工檢查畫面")
                     self.pause()

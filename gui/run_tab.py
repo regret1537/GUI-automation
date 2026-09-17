@@ -86,8 +86,8 @@ class RunTab(ttk.Frame):
         except json.JSONDecodeError as e:
             messagebox.showerror("Profile JSON 錯誤", str(e))
             return
-        if not profile.get("states"):
-            if not messagebox.askyesno("沒有定義任何狀態", "目前 profile 沒有任何 state 定義，執行也不會做任何事。仍要啟動嗎？"):
+        if not profile.get("states") and not profile.get("brightness_triggers"):
+            if not messagebox.askyesno("沒有定義任何流程", "目前 profile 沒有狀態或亮度觸發器，執行也不會做任何事。仍要啟動嗎？"):
                 return
 
         # 就算使用者沒按「同步視窗鎖定設定」把它寫進 JSON，Start 當下也一律套用面板目前的鎖定狀態，

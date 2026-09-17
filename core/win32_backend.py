@@ -18,9 +18,20 @@ WIN32_AVAILABLE = os.name == "nt"
 if WIN32_AVAILABLE:
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
+
+    # 64 位元 Windows 的 HWND/HDC/HBITMAP 是指標大小。若不明確宣告
+    # argtypes，ctypes 會把參數當成 32 位元 int，handle 較大時就會出現
+    # "OverflowError: int too long to convert"。
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user32.PostMessageW.restype = wintypes.BOOL
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
     user32.GetWindowDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = ctypes.c_int
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.PrintWindow.restype = wintypes.BOOL
     gdi32.CreateCompatibleDC.restype = wintypes.HDC
     gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
     gdi32.SelectObject.restype = wintypes.HANDLE
@@ -69,6 +80,26 @@ class BITMAPINFOHEADER(ctypes.Structure):
 
 class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
+
+
+if WIN32_AVAILABLE:
+    # POINT / RECT / BITMAPINFO 必須先宣告後才能放進 argtypes。
+    user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
+    user32.ScreenToClient.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
+    gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+    gdi32.GetDIBits.argtypes = [
+        wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+        ctypes.c_void_p, ctypes.POINTER(BITMAPINFO), wintypes.UINT,
+    ]
+    gdi32.GetDIBits.restype = ctypes.c_int
 
 
 def _require_windows():
@@ -124,6 +155,7 @@ _VK_NAMES = {
     "space": 0x20, "tab": 0x09, "backspace": 0x08, "delete": 0x2E,
     "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
     "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+    **{f"f{i}": 0x6F + i for i in range(1, 13)},
 }
 
 
