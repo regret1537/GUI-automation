@@ -14,6 +14,8 @@ import time
 import threading
 from typing import Callable, List, Dict, Optional, Any
 
+from core import win32_backend
+
 try:
     import pyautogui
     pyautogui.FAILSAFE = True  # 安全閥：滑鼠甩到螢幕角落 = 立刻拋例外中止
@@ -28,8 +30,10 @@ class ActionAbort(Exception):
 
 
 class ActionExecutor:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, backend: str = "foreground", target_handle_fn=None):
         self.logger = logger
+        self.backend = backend
+        self.target_handle_fn = target_handle_fn
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()  # set = 暫停中
 
@@ -62,34 +66,57 @@ class ActionExecutor:
         if not PYAUTOGUI_AVAILABLE:
             raise RuntimeError("pyautogui 不可用（沒有偵測到可用的顯示器）。此環境僅能做架構/邏輯測試。")
 
+    def _target_handle(self) -> int:
+        if self.backend != "win32_background":
+            raise RuntimeError("目前不是 Win32 背景模式。")
+        hwnd = self.target_handle_fn() if self.target_handle_fn else None
+        if not hwnd:
+            raise RuntimeError("Win32 背景模式找不到目標視窗；請先鎖定視窗。")
+        return int(hwnd)
+
     def click(self, x: int, y: int, button: str = "left"):
         self._check_abort()
-        self._require_pyautogui()
-        pyautogui.click(x=x, y=y, button=button)
+        if self.backend == "win32_background":
+            win32_backend.post_mouse(self._target_handle(), x, y, "click", button)
+        else:
+            self._require_pyautogui()
+            pyautogui.click(x=x, y=y, button=button)
         if self.logger:
             self.logger.debug(f"click ({x},{y})")
 
     def double_click(self, x: int, y: int):
         self._check_abort()
-        self._require_pyautogui()
-        pyautogui.doubleClick(x=x, y=y)
+        if self.backend == "win32_background":
+            win32_backend.post_mouse(self._target_handle(), x, y, "double_click")
+        else:
+            self._require_pyautogui()
+            pyautogui.doubleClick(x=x, y=y)
         if self.logger:
             self.logger.debug(f"double_click ({x},{y})")
 
     def move(self, x: int, y: int, duration: float = 0.0):
         self._check_abort()
-        self._require_pyautogui()
-        pyautogui.moveTo(x, y, duration=duration)
+        if self.backend == "win32_background":
+            win32_backend.post_mouse(self._target_handle(), x, y, "move")
+        else:
+            self._require_pyautogui()
+            pyautogui.moveTo(x, y, duration=duration)
 
     def type_text(self, text: str, interval: float = 0.02):
         self._check_abort()
-        self._require_pyautogui()
-        pyautogui.typewrite(text, interval=interval)
+        if self.backend == "win32_background":
+            win32_backend.post_text(self._target_handle(), text, interval)
+        else:
+            self._require_pyautogui()
+            pyautogui.typewrite(text, interval=interval)
 
     def key(self, key_name: str):
         self._check_abort()
-        self._require_pyautogui()
-        pyautogui.press(key_name)
+        if self.backend == "win32_background":
+            win32_backend.post_key(self._target_handle(), key_name)
+        else:
+            self._require_pyautogui()
+            pyautogui.press(key_name)
 
     def wait(self, seconds: float):
         # wait 期間也要能被 abort 打斷，不要整段死睡

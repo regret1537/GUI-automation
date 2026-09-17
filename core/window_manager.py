@@ -82,6 +82,30 @@ class WindowManager:
         win = self._find(title_substring)
         if win is None:
             return None
+
+    def get_handle(self, title_substring: str) -> Optional[int]:
+        """回傳原生視窗 handle（Windows 的 HWND）；其他平台或找不到時回傳 None。"""
+        win = self._find(title_substring)
+        if win is None:
+            return None
+        for attr in ("getHandle", "_hWnd", "hWnd"):
+            try:
+                value = getattr(win, attr)
+                value = value() if callable(value) else value
+                if value:
+                    return int(value)
+            except Exception:
+                continue
+        return None
+
+    def is_minimized(self, title_substring: str) -> bool:
+        win = self._find(title_substring)
+        if win is None:
+            return False
+        try:
+            return bool(win.isMinimized)
+        except Exception:
+            return False
         try:
             return (int(win.left), int(win.top), int(win.width), int(win.height))
         except Exception as e:

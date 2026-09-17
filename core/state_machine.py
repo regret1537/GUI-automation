@@ -17,6 +17,7 @@ from core.state_detector import StateDetector, StateDef, Anchor
 from core.action_executor import ActionExecutor, ActionAbort
 from core.event_classifier import EventClassifier
 from core.window_manager import WindowManager
+from core import win32_backend
 
 
 class StateMachine:
@@ -28,8 +29,6 @@ class StateMachine:
         for label, c in profile.get("coordinates", {}).items():
             self.coords.set(label, c["x"], c["y"], c.get("note", ""), c.get("relative", False))
 
-        self.detector = StateDetector(logger=logger)
-        self.executor = ActionExecutor(logger=logger)
         self.classifier = EventClassifier(logger=logger)
 
         # ---- 視窗鎖定設定（可選）----
@@ -38,6 +37,16 @@ class StateMachine:
         self.activate_before_action: bool = bool(wl.get("activate_before_action", False))
         self.window_manager = window_manager or (WindowManager(logger=logger) if self.window_title_substring else None)
         self.current_window_rect: Optional[tuple] = None  # 每個 loop iteration 更新
+
+        execution = profile.get("execution") or {}
+        self.execution_mode = execution.get("mode", "foreground")
+        target_handle_fn = self._get_target_handle if self.execution_mode == "win32_background" else None
+        self.detector = StateDetector(
+            logger=logger, capture_mode=self.execution_mode, target_handle_fn=target_handle_fn
+        )
+        self.executor = ActionExecutor(
+            logger=logger, backend=self.execution_mode, target_handle_fn=target_handle_fn
+        )
 
         self._states: Dict[str, StateDef] = {}
         for name, s in profile.get("states", {}).items():
@@ -61,6 +70,11 @@ class StateMachine:
         self.action_count = 0
         self.last_state = None
 
+    def _get_target_handle(self):
+        if not self.window_manager or not self.window_title_substring:
+            return None
+        return self.window_manager.get_handle(self.window_title_substring)
+
     # ---- 座標 -> 實際 action 展開（把 profile 裡的 coord_label 換成 x,y）----
     def _resolve_actions(self, actions: list) -> list:
         resolved = []
@@ -83,7 +97,18 @@ class StateMachine:
     # ---- 主迴圈 ----
     def _run_loop(self):
         if self.logger:
-            self.logger.info("State machine 開始執行")
+            mode_name = "Win32 背景模式" if self.execution_mode == "win32_background" else "前景模式"
+            self.logger.info(f"State machine 開始執行（{mode_name}）")
+        if self.execution_mode == "win32_background" and not self.window_title_substring:
+            if self.logger:
+                self.logger.error("Win32 背景模式必須先鎖定目標視窗。")
+            self._running = False
+            return
+        if self.execution_mode == "win32_background" and not win32_backend.WIN32_AVAILABLE:
+            if self.logger:
+                self.logger.error("Win32 背景模式只支援 Windows。")
+            self._running = False
+            return
         consecutive_unknown = 0
         consecutive_window_missing = 0
         while self._running:
@@ -112,7 +137,7 @@ class StateMachine:
                     continue
                 consecutive_window_missing = 0
                 self.current_window_rect = rect
-                if self.activate_before_action:
+                if self.activate_before_action and self.execution_mode != "win32_background":
                     self.window_manager.activate(self.window_title_substring)
 
             state_name = self.detector.detect_state(self._states, self._priority, self.current_window_rect)
