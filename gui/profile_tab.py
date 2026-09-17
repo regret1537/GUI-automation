@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from core import profile_io
+from core import brightness_detector, win32_backend
 from core.win32_backend import compatibility_summary
 
 
@@ -44,11 +45,15 @@ class ProfileTab(ttk.Frame):
 
         self.editor_notebook = ttk.Notebook(self)
         self.editor_notebook.pack(fill="both", expand=True, padx=8, pady=(2, 8))
-        visual, advanced = ttk.Frame(self.editor_notebook), ttk.Frame(self.editor_notebook)
+        visual = ttk.Frame(self.editor_notebook)
+        brightness = ttk.Frame(self.editor_notebook)
+        advanced = ttk.Frame(self.editor_notebook)
         self.editor_notebook.add(visual, text="表單設定（建議）")
+        self.editor_notebook.add(brightness, text="座標亮度觸發")
         self.editor_notebook.add(advanced, text="進階 JSON")
         self.editor_notebook.bind("<<NotebookTabChanged>>", self._on_editor_tab_changed)
         self._build_visual_editor(visual)
+        self._build_brightness_editor(brightness)
         self._build_json_editor(advanced)
 
     def _build_visual_editor(self, parent):
@@ -137,6 +142,33 @@ class ProfileTab(ttk.Frame):
         ttk.Button(row, text="套用 JSON 到表單", command=self._apply_json).pack(side="left")
         ttk.Button(row, text="重新產生 JSON", command=self._refresh_json).pack(side="left", padx=5)
 
+    def _build_brightness_editor(self, parent):
+        ttk.Label(
+            parent,
+            text=("偵測指定座標附近是否發亮：達到亮度門檻就執行；若一直沒亮，超過設定秒數也會強制執行。"
+                  " 可設定 F1～F12，再接滑鼠左鍵或右鍵。"),
+            foreground="#555",
+            wraplength=980,
+        ).pack(fill="x", padx=8, pady=(10, 5))
+        box = ttk.LabelFrame(parent, text="亮度觸發器")
+        box.pack(fill="both", expand=True, padx=8, pady=5)
+        columns = ("name", "watch", "threshold", "force", "actions")
+        self.brightness_tree = ttk.Treeview(box, columns=columns, show="headings", height=15)
+        for col, title, width in (
+            ("name", "名稱", 150), ("watch", "偵測座標", 180),
+            ("threshold", "亮度門檻", 90), ("force", "沒亮強制執行", 120),
+            ("actions", "執行動作", 380),
+        ):
+            self.brightness_tree.heading(col, text=title)
+            self.brightness_tree.column(col, width=width, anchor="w")
+        self.brightness_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        buttons = ttk.Frame(box)
+        buttons.pack(fill="x", padx=5, pady=(0, 6))
+        ttk.Button(buttons, text="＋ 新增觸發器", command=self._add_brightness_trigger).pack(side="left")
+        ttk.Button(buttons, text="編輯選取", command=self._edit_brightness_trigger).pack(side="left", padx=5)
+        ttk.Button(buttons, text="刪除選取", command=self._delete_brightness_trigger).pack(side="left")
+        ttk.Label(buttons, text="提示：請先在①錄製座標，再按『匯入已錄座標』。", foreground="#666").pack(side="left", padx=12)
+
     def _update_mode_help(self):
         if MODE_LABELS.get(self.mode_var.get()) == "win32_background":
             self.mode_help.config(text="背景模式不移動實體滑鼠，視窗可被遮住但不能最小化。" + compatibility_summary())
@@ -162,6 +194,8 @@ class ProfileTab(ttk.Frame):
         self.data.setdefault("states", {})
         self.data.setdefault("state_priority", list(self.data["states"]))
         self.data.setdefault("execution", {"mode": "foreground"})
+        self.data.setdefault("brightness_triggers", [])
+        self.registry.load_dict(self.data["coordinates"])
         self.name_var.set(self.data.get("name", "未命名 profile"))
         self.interval_var.set(str(self.data.get("loop_interval_seconds", 1.0)))
         mode = self.data.get("execution", {}).get("mode", "foreground")
@@ -174,6 +208,7 @@ class ProfileTab(ttk.Frame):
         self.current_path = path
         self.path_label.config(text=path or "(尚未儲存)")
         self.coord_count_label.config(text=f"Profile 內有 {len(self.data['coordinates'])} 個座標")
+        self._fill_brightness_triggers()
         self._selected_state = None
         self._clear_state_form()
         if self.state_list.size():
@@ -239,8 +274,10 @@ class ProfileTab(ttk.Frame):
         messagebox.showerror("Profile 格式錯誤", "\n".join(errors)) if errors else messagebox.showinfo("驗證通過", "所有必要設定均正確。")
 
     def _import_coords(self):
-        for label, entry in self.registry.all_entries().items():
-            self.data["coordinates"][label] = {"x": entry.x, "y": entry.y, "note": entry.note, "relative": entry.relative}
+        self.data["coordinates"] = {
+            label: {"x": entry.x, "y": entry.y, "note": entry.note, "relative": entry.relative}
+            for label, entry in self.registry.all_entries().items()
+        }
         self.coord_count_label.config(text=f"Profile 內有 {len(self.data['coordinates'])} 個座標")
         messagebox.showinfo("完成", f"已匯入 {len(self.registry.all_entries())} 個座標。")
 
@@ -387,7 +424,10 @@ class ProfileTab(ttk.Frame):
     def _action_detail(action):
         kind = action.get("type")
         if kind in ("click", "double_click", "move"):
-            return f"座標：{action.get('coord_label', action.get('coord', '未設定'))}"
+            button = ""
+            if kind in ("click", "double_click"):
+                button = "右鍵，" if action.get("button") == "right" else "左鍵，"
+            return f"{button}座標：{action.get('coord_label', action.get('coord', '未設定'))}"
         if kind == "wait":
             return f"等待 {action.get('seconds', 0.3)} 秒"
         if kind == "type":
@@ -436,8 +476,71 @@ class ProfileTab(ttk.Frame):
         self._fill_actions(actions)
         self.action_tree.selection_set(self.action_tree.get_children()[new])
 
+    @staticmethod
+    def _trigger_action_summary(actions):
+        parts = []
+        for action in actions:
+            if action.get("type") == "key":
+                parts.append(str(action.get("key", "")).upper())
+            elif action.get("type") == "click":
+                button = "右鍵" if action.get("button") == "right" else "左鍵"
+                parts.append(f"{button}@{action.get('coord_label', '?')}")
+            else:
+                parts.append(action.get("type", "?"))
+        return " → ".join(parts)
+
+    def _fill_brightness_triggers(self):
+        if not hasattr(self, "brightness_tree"):
+            return
+        self.brightness_tree.delete(*self.brightness_tree.get_children())
+        for trigger in self.data.get("brightness_triggers", []):
+            enabled = "" if trigger.get("enabled", True) else "（停用）"
+            force_after = float(trigger.get("force_after_seconds", 0))
+            force_text = f"{force_after:g} 秒" if force_after > 0 else "停用"
+            self.brightness_tree.insert(
+                "", tk.END,
+                values=(
+                    f"{trigger.get('name', '未命名')}{enabled}",
+                    trigger.get("watch_coord_label", ""),
+                    trigger.get("threshold", 180),
+                    force_text,
+                    self._trigger_action_summary(trigger.get("actions", [])),
+                ),
+            )
+
+    def _add_brightness_trigger(self):
+        labels = list(self.data.get("coordinates", {}))
+        if not labels:
+            messagebox.showwarning("尚無座標", "請先在①錄製座標，再按『匯入已錄座標』。")
+            return
+        result = BrightnessTriggerDialog(self, labels).show()
+        if result:
+            self.data.setdefault("brightness_triggers", []).append(result)
+            self._fill_brightness_triggers()
+
+    def _edit_brightness_trigger(self):
+        index = self._selected_item_index(self.brightness_tree)
+        if index is None:
+            return
+        labels = list(self.data.get("coordinates", {}))
+        current = self.data["brightness_triggers"][index]
+        result = BrightnessTriggerDialog(self, labels, current).show()
+        if result:
+            self.data["brightness_triggers"][index] = result
+            self._fill_brightness_triggers()
+
+    def _delete_brightness_trigger(self):
+        index = self._selected_item_index(self.brightness_tree)
+        if index is None:
+            return
+        name = self.data["brightness_triggers"][index].get("name", "未命名")
+        if not messagebox.askyesno("刪除觸發器", f"確定刪除「{name}」？"):
+            return
+        self.data["brightness_triggers"].pop(index)
+        self._fill_brightness_triggers()
+
     def _on_editor_tab_changed(self, _event=None):
-        if self.editor_notebook.index(self.editor_notebook.select()) == 1:
+        if self.editor_notebook.index(self.editor_notebook.select()) == 2:
             self._refresh_json()
 
     def _refresh_json(self):
@@ -511,6 +614,159 @@ class AnchorDialog:
         return self.result
 
 
+class BrightnessTriggerDialog:
+    def __init__(self, parent, coord_labels, initial=None):
+        self.parent = parent
+        self.coord_labels = coord_labels
+        self.initial = initial or {}
+        self.result = None
+
+    def show(self):
+        win = tk.Toplevel(self.parent)
+        win.title("座標亮度觸發器")
+        win.transient(self.parent.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        actions = self.initial.get("actions", [])
+        initial_key = next((a.get("key", "").upper() for a in actions if a.get("type") == "key"), "不按鍵")
+        click_action = next((a for a in actions if a.get("type") == "click"), {})
+        initial_click = "右鍵" if click_action.get("button") == "right" else ("左鍵" if click_action else "不點擊")
+
+        enabled = tk.BooleanVar(value=self.initial.get("enabled", True))
+        name = tk.StringVar(value=self.initial.get("name", "新亮度觸發器"))
+        watch = tk.StringVar(value=self.initial.get("watch_coord_label", self.coord_labels[0]))
+        threshold = tk.StringVar(value=str(self.initial.get("threshold", 180)))
+        radius = tk.StringVar(value=str(self.initial.get("radius", 3)))
+        cooldown = tk.StringVar(value=str(self.initial.get("cooldown_seconds", 1.0)))
+        force_after = tk.StringVar(value=str(self.initial.get("force_after_seconds", 5.0)))
+        key = tk.StringVar(value=initial_key)
+        click = tk.StringVar(value=initial_click)
+        click_coord = tk.StringVar(value=click_action.get("coord_label", watch.get()))
+
+        fields = ttk.Frame(win)
+        fields.pack(fill="both", expand=True, padx=12, pady=10)
+        ttk.Checkbutton(fields, text="啟用此觸發器", variable=enabled).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(fields, text="名稱").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(fields, textvariable=name, width=34).grid(row=1, column=1, sticky="ew")
+        ttk.Label(fields, text="偵測發亮的座標").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Combobox(fields, textvariable=watch, values=self.coord_labels, state="readonly", width=31).grid(row=2, column=1, sticky="ew")
+        ttk.Label(fields, text="亮度門檻（0～255）").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Spinbox(fields, from_=0, to=255, increment=1, textvariable=threshold, width=10).grid(row=3, column=1, sticky="w")
+        ttk.Label(fields, text="取樣半徑（像素）").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Spinbox(fields, from_=0, to=30, increment=1, textvariable=radius, width=10).grid(row=4, column=1, sticky="w")
+        ttk.Label(fields, text="發亮時最短重試間隔（秒）").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Spinbox(fields, from_=0.05, to=3600, increment=0.1, textvariable=cooldown, width=10).grid(row=5, column=1, sticky="w")
+        ttk.Label(fields, text="沒發亮，超過幾秒仍強制執行").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Spinbox(fields, from_=0, to=86400, increment=0.5, textvariable=force_after, width=10).grid(row=6, column=1, sticky="w")
+        ttk.Label(fields, text="鍵盤動作").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Combobox(fields, textvariable=key, values=["不按鍵"] + [f"F{i}" for i in range(1, 13)], state="readonly", width=12).grid(row=7, column=1, sticky="w")
+        ttk.Label(fields, text="滑鼠動作").grid(row=8, column=0, sticky="w", pady=4)
+        click_box = ttk.Combobox(fields, textvariable=click, values=("不點擊", "左鍵", "右鍵"), state="readonly", width=12)
+        click_box.grid(row=8, column=1, sticky="w")
+        ttk.Label(fields, text="滑鼠點擊座標").grid(row=9, column=0, sticky="w", pady=4)
+        coord_box = ttk.Combobox(fields, textvariable=click_coord, values=self.coord_labels, state="readonly", width=31)
+        coord_box.grid(row=9, column=1, sticky="ew")
+        ttk.Label(
+            fields,
+            text="設為 0 秒可停用『沒發亮也強制執行』。亮度值會顯示在④執行監控的事件紀錄。",
+            foreground="#666",
+            wraplength=440,
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 2))
+
+        def refresh_click(*_):
+            coord_box.config(state="disabled" if click.get() == "不點擊" else "readonly")
+
+        click_box.bind("<<ComboboxSelected>>", refresh_click)
+        refresh_click()
+
+        def ok():
+            try:
+                threshold_value = float(threshold.get())
+                radius_value = int(radius.get())
+                cooldown_value = float(cooldown.get())
+                force_value = float(force_after.get())
+                if not 0 <= threshold_value <= 255 or radius_value < 0 or cooldown_value <= 0 or force_value < 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("設定錯誤", "請確認亮度、半徑與秒數都是有效數值。", parent=win)
+                return
+            if not name.get().strip() or not watch.get():
+                messagebox.showerror("設定錯誤", "名稱與偵測座標不能空白。", parent=win)
+                return
+            result_actions = []
+            if key.get() != "不按鍵":
+                result_actions.append({"type": "key", "key": key.get().lower()})
+            if click.get() != "不點擊":
+                if not click_coord.get():
+                    messagebox.showerror("設定錯誤", "請選擇滑鼠點擊座標。", parent=win)
+                    return
+                result_actions.append({
+                    "type": "click",
+                    "coord_label": click_coord.get(),
+                    "button": "right" if click.get() == "右鍵" else "left",
+                })
+            if not result_actions:
+                messagebox.showerror("設定錯誤", "至少選擇一個鍵盤或滑鼠動作。", parent=win)
+                return
+            self.result = {
+                "name": name.get().strip(),
+                "enabled": bool(enabled.get()),
+                "watch_coord_label": watch.get(),
+                "threshold": threshold_value,
+                "radius": radius_value,
+                "cooldown_seconds": cooldown_value,
+                "force_after_seconds": force_value,
+                "actions": result_actions,
+            }
+            win.destroy()
+
+        def test_brightness():
+            coord = self.parent.data.get("coordinates", {}).get(watch.get())
+            if not coord:
+                messagebox.showerror("無法測試", "找不到選取的偵測座標。", parent=win)
+                return
+            x, y = int(coord["x"]), int(coord["y"])
+            rect = None
+            panel = self.parent.window_lock_panel
+            if coord.get("relative"):
+                rect = panel.get_current_rect() if panel and panel.is_locked() else None
+                if rect is None:
+                    messagebox.showerror("無法測試", "這是相對座標，請先鎖定目標視窗。", parent=win)
+                    return
+                x, y = rect[0] + x, rect[1] + y
+            try:
+                if MODE_LABELS.get(self.parent.mode_var.get()) == "win32_background":
+                    if not panel or not panel.is_locked():
+                        raise RuntimeError("背景模式請先鎖定目標視窗。")
+                    rect = panel.get_current_rect()
+                    if rect is None:
+                        raise RuntimeError("目前抓不到鎖定視窗的位置。")
+                    hwnd = panel.wm.get_handle(panel.locked_title)
+                    frame = win32_backend.capture_window(hwnd) if hwnd else None
+                    if frame is None:
+                        raise RuntimeError("無法取得背景畫面，可能是 DirectX 擷取限制。")
+                    current = brightness_detector.sample_frame(frame, x, y, int(radius.get()), rect)
+                else:
+                    current = brightness_detector.sample_screen(x, y, int(radius.get()))
+                if current is None:
+                    raise RuntimeError("沒有取得亮度值。")
+                target = float(threshold.get())
+            except Exception as exc:
+                messagebox.showerror("亮度測試失敗", str(exc), parent=win)
+                return
+            status = "會觸發（已發亮）" if current >= target else "不會觸發（尚未發亮）"
+            messagebox.showinfo("目前亮度", f"目前亮度：{current:.1f}\n設定門檻：{target:g}\n結果：{status}", parent=win)
+
+        buttons = ttk.Frame(win)
+        buttons.pack(pady=(0, 10))
+        ttk.Button(buttons, text="測試目前亮度", command=test_brightness).pack(side="left", padx=4)
+        ttk.Button(buttons, text="確定", command=ok).pack(side="left", padx=4)
+        ttk.Button(buttons, text="取消", command=win.destroy).pack(side="left", padx=4)
+        win.wait_window()
+        return self.result
+
+
 class ActionDialog:
     TYPES = ("click", "double_click", "move", "wait", "type", "key")
 
@@ -524,6 +780,7 @@ class ActionDialog:
         win.transient(self.parent.winfo_toplevel())
         win.grab_set()
         kind = tk.StringVar(value=self.initial.get("type", "click"))
+        mouse_button = tk.StringVar(value="右鍵" if self.initial.get("button") == "right" else "左鍵")
         value = tk.StringVar()
         if kind.get() in ("click", "double_click", "move"):
             value.set(self.initial.get("coord_label", ""))
@@ -540,26 +797,34 @@ class ActionDialog:
         prompt.grid(row=1, column=0, padx=8, pady=8, sticky="w")
         value_box = ttk.Combobox(win, textvariable=value, values=self.coord_labels, width=35)
         value_box.grid(row=1, column=1, padx=6)
+        button_label = ttk.Label(win, text="滑鼠按鍵")
+        button_label.grid(row=2, column=0, padx=8, pady=4, sticky="w")
+        button_box = ttk.Combobox(win, textvariable=mouse_button, values=("左鍵", "右鍵"), state="readonly", width=12)
+        button_box.grid(row=2, column=1, padx=6, sticky="w")
         hint = ttk.Label(win, foreground="#666", wraplength=380)
-        hint.grid(row=2, column=0, columnspan=2, padx=8, sticky="w")
+        hint.grid(row=3, column=0, columnspan=2, padx=8, pady=4, sticky="w")
 
         def refresh(*_):
             if kind.get() in ("click", "double_click", "move"):
                 prompt.config(text="座標名稱")
                 value_box.config(values=self.coord_labels)
                 hint.config(text="請先在①座標錄製後，按『匯入已錄座標』。")
+                button_box.config(state="readonly" if kind.get() in ("click", "double_click") else "disabled")
             elif kind.get() == "wait":
                 prompt.config(text="等待秒數")
                 value_box.config(values=())
                 hint.config(text="例如 0.5")
+                button_box.config(state="disabled")
             elif kind.get() == "type":
                 prompt.config(text="輸入文字")
                 value_box.config(values=())
                 hint.config(text="背景模式會以 WM_CHAR 傳送文字。")
+                button_box.config(state="disabled")
             else:
                 prompt.config(text="按鍵名稱")
-                value_box.config(values=("enter", "escape", "space", "tab", "left", "right", "up", "down"))
-                hint.config(text="背景模式支援常用按鍵及單一英數字元。")
+                value_box.config(values=tuple([f"f{i}" for i in range(1, 13)] + ["enter", "escape", "space", "tab", "left", "right", "up", "down"]))
+                hint.config(text="背景模式支援 F1～F12、常用按鍵及單一英數字元。")
+                button_box.config(state="disabled")
 
         type_box.bind("<<ComboboxSelected>>", refresh)
         refresh()
@@ -571,6 +836,8 @@ class ActionDialog:
                     messagebox.showerror("設定錯誤", "請選擇座標名稱。", parent=win)
                     return
                 self.result = {"type": kind.get(), "coord_label": raw}
+                if kind.get() in ("click", "double_click"):
+                    self.result["button"] = "right" if mouse_button.get() == "右鍵" else "left"
             elif kind.get() == "wait":
                 try:
                     seconds = float(raw)
@@ -587,7 +854,7 @@ class ActionDialog:
             win.destroy()
 
         buttons = ttk.Frame(win)
-        buttons.grid(row=3, column=0, columnspan=2, pady=10)
+        buttons.grid(row=4, column=0, columnspan=2, pady=10)
         ttk.Button(buttons, text="確定", command=ok).pack(side="left", padx=4)
         ttk.Button(buttons, text="取消", command=win.destroy).pack(side="left", padx=4)
         win.wait_window()

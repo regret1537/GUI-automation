@@ -28,6 +28,17 @@ Profile 結構（範例見 profiles/example_calculator/profile.json）：
     }
   },
   "state_priority": ["state_a", "state_b", ...],   // 偵測時的檢查順序，可省略
+  "brightness_triggers": [
+    {
+      "name": "技能 1",
+      "watch_coord_label": "技能圖示中心",
+      "threshold": 180,
+      "radius": 3,
+      "cooldown_seconds": 1.0,
+      "force_after_seconds": 10.0,
+      "actions": [{"type": "key", "key": "f1"}, {"type": "click", "coord_label": "目標", "button": "left"}]
+    }
+  ],
   "loop_interval_seconds": 1.0
 }
 
@@ -50,6 +61,7 @@ def new_empty_profile(name: str = "未命名 profile") -> Dict[str, Any]:
         "state_priority": [],
         "loop_interval_seconds": 1.0,
         "execution": {"mode": "foreground"},
+        "brightness_triggers": [],
     }
 
 
@@ -76,6 +88,61 @@ def validate_profile(data: Dict[str, Any]) -> list:
         window_lock = {}
     if mode == "win32_background" and not window_lock.get("title_substring"):
         errors.append("Win32 背景模式必須設定 window_lock.title_substring（請先鎖定目標視窗）")
+    triggers = data.get("brightness_triggers", [])
+    if not isinstance(triggers, list):
+        errors.append("brightness_triggers 必須是陣列 (list)")
+        triggers = []
+    coordinates = data.get("coordinates") if isinstance(data.get("coordinates"), dict) else {}
+    for index, trigger in enumerate(triggers, start=1):
+        prefix = f"亮度觸發器 #{index}"
+        if not isinstance(trigger, dict):
+            errors.append(f"{prefix} 必須是物件")
+            continue
+        watch_label = trigger.get("watch_coord_label", "")
+        if not watch_label:
+            errors.append(f"{prefix} 缺少偵測座標")
+        elif watch_label not in coordinates:
+            errors.append(f"{prefix} 的偵測座標不存在: {watch_label}")
+        try:
+            threshold = float(trigger.get("threshold", 180))
+            if not 0 <= threshold <= 255:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"{prefix} 的亮度門檻必須是 0～255")
+        try:
+            if int(trigger.get("radius", 3)) < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"{prefix} 的取樣半徑必須是 0 或正整數")
+        try:
+            if float(trigger.get("cooldown_seconds", 1.0)) <= 0:
+                raise ValueError
+            if float(trigger.get("force_after_seconds", 0.0)) < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"{prefix} 的冷卻秒數須大於 0，強制執行秒數不可小於 0")
+        actions = trigger.get("actions", [])
+        if not isinstance(actions, list) or not actions:
+            errors.append(f"{prefix} 至少要設定一個執行動作")
+            continue
+        for action_index, action in enumerate(actions, start=1):
+            if not isinstance(action, dict):
+                errors.append(f"{prefix} 動作 #{action_index} 必須是物件")
+                continue
+            action_type = action.get("type")
+            if action_type == "key":
+                key = str(action.get("key", "")).lower()
+                allowed = {f"f{i}" for i in range(1, 13)}
+                if key not in allowed:
+                    errors.append(f"{prefix} 鍵盤動作只支援 F1～F12")
+            elif action_type == "click":
+                coord_label = action.get("coord_label", "")
+                if coord_label not in coordinates:
+                    errors.append(f"{prefix} 的點擊座標不存在: {coord_label}")
+                if action.get("button", "left") not in ("left", "right"):
+                    errors.append(f"{prefix} 的滑鼠按鍵必須是 left 或 right")
+            else:
+                errors.append(f"{prefix} 不支援動作類型: {action_type}")
     return errors
 
 

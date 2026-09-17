@@ -84,13 +84,13 @@ class ActionExecutor:
         if self.logger:
             self.logger.debug(f"click ({x},{y})")
 
-    def double_click(self, x: int, y: int):
+    def double_click(self, x: int, y: int, button: str = "left"):
         self._check_abort()
         if self.backend == "win32_background":
-            win32_backend.post_mouse(self._target_handle(), x, y, "double_click")
+            win32_backend.post_mouse(self._target_handle(), x, y, "double_click", button)
         else:
             self._require_pyautogui()
-            pyautogui.doubleClick(x=x, y=y)
+            pyautogui.doubleClick(x=x, y=y, button=button)
         if self.logger:
             self.logger.debug(f"double_click ({x},{y})")
 
@@ -143,7 +143,7 @@ class ActionExecutor:
                 self.click(x, y, act.get("button", "left"))
             elif t == "double_click":
                 x, y = act["coord"]
-                self.double_click(x, y)
+                self.double_click(x, y, act.get("button", "left"))
             elif t == "move":
                 x, y = act["coord"]
                 self.move(x, y, act.get("duration", 0.0))

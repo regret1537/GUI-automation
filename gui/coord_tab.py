@@ -11,8 +11,6 @@ Tab 1: 座標錄製器
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading
-import time
 
 try:
     import pyautogui
@@ -35,7 +33,7 @@ class CoordTab(ttk.Frame):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=8, pady=8)
 
-        ttk.Label(top, text="Label:").pack(side="left")
+        ttk.Label(top, text="座標名稱:").pack(side="left")
         self.label_var = tk.StringVar()
         ttk.Entry(top, textvariable=self.label_var, width=20).pack(side="left", padx=4)
 
@@ -43,7 +41,7 @@ class CoordTab(ttk.Frame):
         self.note_var = tk.StringVar()
         ttk.Entry(top, textvariable=self.note_var, width=24).pack(side="left", padx=4)
 
-        self.record_btn = ttk.Button(top, text="開始錄製 (3秒倒數)", command=self._start_record)
+        self.record_btn = ttk.Button(top, text="＋ 錄製／覆蓋座標 (3秒)", command=self._start_record)
         self.record_btn.pack(side="left", padx=12)
 
         self.countdown_label = ttk.Label(top, text="", foreground="red")
@@ -60,11 +58,14 @@ class CoordTab(ttk.Frame):
             self.tree.heading(c, text=headers[c])
             self.tree.column(c, width=w)
         self.tree.pack(fill="both", expand=True, padx=8, pady=4)
+        self.tree.bind("<Double-1>", self._edit_selected)
+        self.tree.bind("<Delete>", self._delete_selected)
 
         btn_row = ttk.Frame(self)
         btn_row.pack(fill="x", padx=8, pady=4)
-        ttk.Button(btn_row, text="刪除選取", command=self._delete_selected).pack(side="left")
-        ttk.Button(btn_row, text="重新整理", command=self.refresh_table).pack(side="left", padx=8)
+        ttk.Button(btn_row, text="編輯選取", command=self._edit_selected).pack(side="left")
+        ttk.Button(btn_row, text="刪除選取（Delete）", command=self._delete_selected).pack(side="left", padx=8)
+        ttk.Button(btn_row, text="重新整理", command=self.refresh_table).pack(side="left")
 
         if not PYAUTOGUI_AVAILABLE:
             ttk.Label(
@@ -82,14 +83,17 @@ class CoordTab(ttk.Frame):
             messagebox.showerror("無法錄製", "此環境沒有可用的顯示器，無法擷取滑鼠位置。")
             return
         self.record_btn.config(state="disabled")
-        threading.Thread(target=self._countdown_and_capture, args=(label, self.note_var.get()), daemon=True).start()
-
-    def _countdown_and_capture(self, label, note):
         locked = bool(self.window_lock_panel and self.window_lock_panel.is_locked())
-        for remaining in (3, 2, 1):
-            hint = "（將存成視窗相對座標）" if locked else "（將存成螢幕絕對座標）"
+        self._record_context = (label, self.note_var.get(), locked)
+        self._countdown_step(3)
+
+    def _countdown_step(self, remaining):
+        label, note, locked = self._record_context
+        hint = "（將存成視窗相對座標）" if locked else "（將存成螢幕絕對座標）"
+        if remaining > 0:
             self.countdown_label.config(text=f"請把滑鼠移到目標位置... {remaining} {hint}")
-            time.sleep(1)
+            self.after(1000, self._countdown_step, remaining - 1)
+            return
         x, y = pyautogui.position()
 
         if locked:
@@ -116,10 +120,37 @@ class CoordTab(ttk.Frame):
         self.note_var.set("")
         self.refresh_table()
 
-    def _delete_selected(self):
-        for item in self.tree.selection():
+    def _delete_selected(self, _event=None):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        if not messagebox.askyesno("刪除座標", f"確定刪除選取的 {len(selected)} 個座標？"):
+            return
+        for item in selected:
             label = self.tree.item(item, "values")[0]
             self.registry.remove(label)
+        self.refresh_table()
+
+    def _edit_selected(self, _event=None):
+        selected = self.tree.selection()
+        if len(selected) != 1:
+            if selected:
+                messagebox.showwarning("請只選一筆", "一次只能編輯一個座標。")
+            return
+        old_label = self.tree.item(selected[0], "values")[0]
+        entry = self.registry.all_entries().get(old_label)
+        if entry is None:
+            return
+        result = CoordinateEditDialog(self, old_label, entry).show()
+        if not result:
+            return
+        new_label, x, y, note, relative = result
+        if new_label != old_label and new_label in self.registry.all_entries():
+            messagebox.showerror("名稱重複", f"座標名稱「{new_label}」已存在。")
+            return
+        if new_label != old_label:
+            self.registry.remove(old_label)
+        self.registry.set(new_label, x, y, note, relative)
         self.refresh_table()
 
     def refresh_table(self):
@@ -134,3 +165,42 @@ class CoordTab(ttk.Frame):
             )
         else:
             self.lock_hint_label.config(text="目前未鎖定視窗 — 錄製的座標會是螢幕絕對座標。")
+
+
+class CoordinateEditDialog:
+    def __init__(self, parent, label, entry):
+        self.parent, self.label, self.entry = parent, label, entry
+        self.result = None
+
+    def show(self):
+        win = tk.Toplevel(self.parent)
+        win.title("編輯座標")
+        win.transient(self.parent.winfo_toplevel())
+        win.grab_set()
+        name = tk.StringVar(value=self.label)
+        x = tk.StringVar(value=str(self.entry.x))
+        y = tk.StringVar(value=str(self.entry.y))
+        note = tk.StringVar(value=self.entry.note)
+        relative = tk.BooleanVar(value=self.entry.relative)
+        for row, (text, variable) in enumerate((("座標名稱", name), ("X", x), ("Y", y), ("備註", note))):
+            ttk.Label(win, text=text).grid(row=row, column=0, padx=8, pady=5, sticky="w")
+            ttk.Entry(win, textvariable=variable, width=32).grid(row=row, column=1, padx=8, pady=5)
+        ttk.Checkbutton(win, text="相對於鎖定視窗左上角", variable=relative).grid(row=4, column=0, columnspan=2, padx=8, pady=5, sticky="w")
+
+        def ok():
+            try:
+                new_label = name.get().strip()
+                if not new_label:
+                    raise ValueError
+                self.result = (new_label, int(x.get()), int(y.get()), note.get(), bool(relative.get()))
+            except ValueError:
+                messagebox.showerror("設定錯誤", "名稱不能空白，X/Y 必須是整數。", parent=win)
+                return
+            win.destroy()
+
+        buttons = ttk.Frame(win)
+        buttons.grid(row=5, column=0, columnspan=2, pady=10)
+        ttk.Button(buttons, text="儲存", command=ok).pack(side="left", padx=4)
+        ttk.Button(buttons, text="取消", command=win.destroy).pack(side="left", padx=4)
+        win.wait_window()
+        return self.result
