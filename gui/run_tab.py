@@ -11,6 +11,7 @@ from tkinter import ttk, messagebox
 import json
 
 from core.state_machine import StateMachine
+from core import profile_io
 
 
 class RunTab(ttk.Frame):
@@ -45,6 +46,9 @@ class RunTab(ttk.Frame):
         ttk.Label(status, text="已執行動作數:").pack(side="left", padx=(20, 0))
         self.count_label = ttk.Label(status, text="0")
         self.count_label.pack(side="left", padx=6)
+        ttk.Label(status, text="執行模式:").pack(side="left", padx=(20, 0))
+        self.mode_label = ttk.Label(status, text="-")
+        self.mode_label.pack(side="left", padx=6)
 
         ttk.Label(
             self,
@@ -92,6 +96,14 @@ class RunTab(ttk.Frame):
             profile = dict(profile)
             profile["window_lock"] = self.window_lock_panel.get_lock_config()
 
+        errors = profile_io.validate_profile(profile)
+        if errors:
+            messagebox.showerror("設定尚未完成", "\n".join(errors))
+            return
+
+        mode = (profile.get("execution") or {}).get("mode", "foreground")
+        self.mode_label.config(text="Win32 背景" if mode == "win32_background" else "前景滑鼠")
+
         self.machine = StateMachine(profile, logger=self.logger, window_manager=self.window_manager)
         self.machine.on_state_change = lambda s: self.after(0, lambda: self.state_label.config(text=s))
         self.machine.start()
@@ -122,3 +134,4 @@ class RunTab(ttk.Frame):
         self.resume_btn.config(state="disabled")
         self.stop_btn.config(state="disabled")
         self.state_label.config(text="-")
+        self.mode_label.config(text="-")

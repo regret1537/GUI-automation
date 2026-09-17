@@ -5,6 +5,7 @@ Profile 結構（範例見 profiles/example_calculator/profile.json）：
 
 {
   "name": "profile 名稱",
+  "execution": {"mode": "foreground" | "win32_background"},
   "window_lock": {                          // 選填。不設定就是全螢幕絕對座標模式（舊行為）
     "title_substring": "視窗標題的一部分",      // 用來搜尋目標視窗，需要夠獨特避免抓錯
     "activate_before_action": true            // 每輪動作前先把視窗帶到最上層
@@ -48,6 +49,7 @@ def new_empty_profile(name: str = "未命名 profile") -> Dict[str, Any]:
         "states": {},
         "state_priority": [],
         "loop_interval_seconds": 1.0,
+        "execution": {"mode": "foreground"},
     }
 
 
@@ -61,6 +63,19 @@ def validate_profile(data: Dict[str, Any]) -> list:
         errors.append("states 必須是物件 (dict)")
     if "coordinates" in data and not isinstance(data["coordinates"], dict):
         errors.append("coordinates 必須是物件 (dict)")
+    execution = data.get("execution") or {}
+    if not isinstance(execution, dict):
+        errors.append("execution 必須是物件 (dict)")
+        execution = {}
+    mode = execution.get("mode", "foreground")
+    if mode not in ("foreground", "win32_background"):
+        errors.append("execution.mode 必須是 foreground 或 win32_background")
+    window_lock = data.get("window_lock") or {}
+    if window_lock and not isinstance(window_lock, dict):
+        errors.append("window_lock 必須是物件 (dict)")
+        window_lock = {}
+    if mode == "win32_background" and not window_lock.get("title_substring"):
+        errors.append("Win32 背景模式必須設定 window_lock.title_substring（請先鎖定目標視窗）")
     return errors
 
 

@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
+from core import win32_backend
+
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
@@ -37,14 +39,46 @@ class StateDef:
 
 
 class StateDetector:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, capture_mode: str = "foreground", target_handle_fn=None):
         self.logger = logger
-        if not PYAUTOGUI_AVAILABLE:
+        self.capture_mode = capture_mode
+        self.target_handle_fn = target_handle_fn
+        if capture_mode == "foreground" and not PYAUTOGUI_AVAILABLE:
             if logger:
                 logger.warn("pyautogui 無法載入（通常是因為沒有可用的顯示器）。"
                              "StateDetector 會在呼叫時直接回傳 None，僅供架構展示/離線測試。")
 
-    def _locate(self, anchor: Anchor, window_rect: Optional[tuple] = None) -> bool:
+    def _locate_in_frame(self, anchor: Anchor, frame, window_rect: Optional[tuple]) -> bool:
+        try:
+            import cv2
+            template = cv2.imread(anchor.template_path, cv2.IMREAD_COLOR)
+            if template is None:
+                raise RuntimeError("無法讀取辨識圖片")
+            search = frame
+            if anchor.region:
+                x, y, w, h = map(int, anchor.region)
+                # 舊 profile 的 region 是螢幕座標；背景擷取影像是視窗座標。
+                if window_rect:
+                    x -= int(window_rect[0])
+                    y -= int(window_rect[1])
+                x, y = max(0, x), max(0, y)
+                search = frame[y:y + max(0, h), x:x + max(0, w)]
+            if search.size == 0:
+                return False
+            th, tw = template.shape[:2]
+            sh, sw = search.shape[:2]
+            if th > sh or tw > sw:
+                return False
+            result = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
+            return float(result.max()) >= float(anchor.confidence)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"背景圖片辨識失敗 ({anchor.template_path}): {e}")
+            return False
+
+    def _locate(self, anchor: Anchor, window_rect: Optional[tuple] = None, frame=None) -> bool:
+        if frame is not None:
+            return self._locate_in_frame(anchor, frame, window_rect)
         if not PYAUTOGUI_AVAILABLE:
             return False
         # anchor 自己沒指定 region 時，優先用目前鎖定視窗的範圍當搜尋區域，
@@ -62,10 +96,10 @@ class StateDetector:
                 self.logger.debug(f"locateOnScreen 失敗 ({anchor.template_path}): {e}")
             return False
 
-    def check_state(self, state: StateDef, window_rect: Optional[tuple] = None) -> bool:
+    def check_state(self, state: StateDef, window_rect: Optional[tuple] = None, frame=None) -> bool:
         if not state.anchors:
             return False
-        results = [self._locate(a, window_rect) for a in state.anchors]
+        results = [self._locate(a, window_rect, frame) for a in state.anchors]
         if state.match_mode == "all":
             return all(results)
         return any(results)
@@ -81,9 +115,22 @@ class StateDetector:
         找不到任何命中時回傳 None（呼叫端應進入 UNKNOWN 處理流程，而不是盲目繼續）。
         window_rect: 目前鎖定視窗的 (x,y,w,h)，用來當作沒指定 region 的 anchor 的預設搜尋範圍。
         """
+        frame = None
+        if self.capture_mode == "win32_background":
+            try:
+                hwnd = self.target_handle_fn() if self.target_handle_fn else None
+                frame = win32_backend.capture_window(hwnd) if hwnd else None
+            except Exception as e:
+                if self.logger:
+                    self.logger.warn(f"背景視窗擷取失敗: {e}")
+            if frame is None:
+                if self.logger:
+                    self.logger.warn("背景視窗擷取沒有取得畫面（DirectX 視窗可能不支援 PrintWindow）。")
+                return None
+
         order = priority or list(states.keys())
         for name in order:
             state = states.get(name)
-            if state and self.check_state(state, window_rect):
+            if state and self.check_state(state, window_rect, frame):
                 return name
         return None

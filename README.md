@@ -53,8 +53,17 @@ python3 main.py
 - 範圍不要太大（背景雜訊多，matching 較不穩定），也不要太小（容易跟其他元素混淆）
 - 同一個狀態如果在不同解析度/縮放下長得不一樣，可以設定多個 anchor 並用 `match_mode: "any"`
 
-### ③ Profile 編輯
-Profile 是一個 JSON，定義：
+### ③ 圖形化流程設定
+不需要手寫 JSON。表單與按鈕可以直接設定：
+- Profile 名稱、檢查間隔與執行模式
+- 新增、刪除及調整狀態判斷順序
+- 選擇辨識圖片、設定準確度與搜尋範圍
+- 新增、編輯、刪除及排序 click / double_click / move / wait / type / key 動作
+- 從①匯入座標、同步目前鎖定視窗
+
+「進階 JSON」分頁仍然保留，方便需要手動微調或貼入既有設定的使用者。
+
+Profile 儲存的 JSON 定義：
 - `coordinates`：座標表（可以從①一鍵匯入）
 - `states`：每個狀態要比對哪些 anchor、命中後要執行哪串動作 (`on_enter_actions`)
 - `state_priority`：偵測時的檢查順序
@@ -66,6 +75,15 @@ Profile 是一個 JSON，定義：
 Start / Pause / Resume / Stop，即時 log 面板會顯示狀態切換、每次動作、以及 WARN/ERROR。
 
 `Pause` 是軟暫停（迴圈跑到下個檢查點就停住，可以隨時 Resume）；真的要立刻斷開用 `Stop`，或直接把滑鼠甩到螢幕角落觸發 FAILSAFE。
+
+## 前景與 Win32 背景模式
+
+在③的「執行模式」可以選：
+
+- **前景模式**：使用 PyAutoGUI，控制實體滑鼠與鍵盤；相容性最高。
+- **Win32 背景模式（實驗性）**：Windows 專用，以 `PostMessage` 把輸入送到鎖定視窗，並用 `PrintWindow` 擷取被遮住的視窗；不會移動實體滑鼠。
+
+背景模式必須先鎖定目標視窗，視窗可被其他視窗遮住，但請勿最小化。DirectX、Raw Input、獨佔全螢幕或有防作弊保護的程式可能忽略背景輸入，或讓 `PrintWindow` 只取得黑畫面；這是目標程式的輸入／擷取限制，無法保證所有遊戲都相容。遇到不相容時請改回前景模式，或把目標放到獨立的虛擬機／另一台電腦執行。
 
 ## 視窗鎖定 (Window Lock)
 
@@ -100,6 +118,7 @@ gui-automation-framework/
 │   ├── event_classifier.py
 │   ├── profile_io.py
 │   ├── window_manager.py      視窗鎖定（跨平台視窗查找/取得位置/置頂）
+│   ├── win32_backend.py       Windows 背景擷取與輸入（實驗性）
 │   └── logger.py
 ├── gui/                       Tkinter 介面
 │   ├── main_window.py

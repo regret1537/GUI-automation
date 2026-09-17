@@ -20,7 +20,8 @@ class MainWindow(tk.Tk):
     def __init__(self, base_dir: str):
         super().__init__()
         self.title("GUI Automation Framework — 通用桌面自動化框架")
-        self.geometry("980x680")
+        self.geometry("1180x820")
+        self.minsize(980, 680)
 
         self.base_dir = base_dir
         self.templates_dir = os.path.join(base_dir, "templates")
@@ -49,7 +50,7 @@ class MainWindow(tk.Tk):
 
         notebook.add(self.coord_tab, text="① 座標錄製")
         notebook.add(self.template_tab, text="② 狀態錨點截圖")
-        notebook.add(self.profile_tab, text="③ Profile 編輯")
+        notebook.add(self.profile_tab, text="③ 圖形化流程設定")
         notebook.add(self.run_tab, text="④ 執行監控")
 
         # 切分頁時把座標錄製分頁的「目前鎖定狀態」提示刷新一下，避免顯示過期資訊

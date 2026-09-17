@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from core.window_manager import WindowManager, WINDOW_MGMT_AVAILABLE
+from core import win32_backend
 
 
 class WindowLockPanel(ttk.LabelFrame):
@@ -35,6 +36,9 @@ class WindowLockPanel(ttk.LabelFrame):
         self.lock_btn.pack(side="left", padx=4)
         self.unlock_btn = ttk.Button(row, text="解除鎖定", command=self._unlock, state="disabled")
         self.unlock_btn.pack(side="left", padx=4)
+
+        self.capture_test_btn = ttk.Button(row, text="測試背景擷取", command=self._test_background_capture, state="disabled")
+        self.capture_test_btn.pack(side="left", padx=4)
 
         ttk.Checkbutton(row, text="執行前自動置頂視窗", variable=self.activate_var).pack(side="left", padx=12)
 
@@ -78,6 +82,7 @@ class WindowLockPanel(ttk.LabelFrame):
         self.lock_btn.config(state="disabled")
         self.unlock_btn.config(state="normal")
         self.combo.config(state="disabled")
+        self.capture_test_btn.config(state="normal" if win32_backend.WIN32_AVAILABLE else "disabled")
         self.status_label.config(text=self._status_text())
         if self.logger:
             self.logger.info(f"視窗鎖定 -> 「{title}」")
@@ -87,6 +92,7 @@ class WindowLockPanel(ttk.LabelFrame):
         self.lock_btn.config(state="normal")
         self.unlock_btn.config(state="disabled")
         self.combo.config(state="normal")
+        self.capture_test_btn.config(state="disabled")
         self.status_label.config(text=self._status_text())
         if self.logger:
             self.logger.info("視窗鎖定已解除")
@@ -104,6 +110,25 @@ class WindowLockPanel(ttk.LabelFrame):
             "title_substring": self.locked_title,
             "activate_before_action": bool(self.activate_var.get()),
         }
+
+    def _test_background_capture(self):
+        if not self.locked_title:
+            messagebox.showwarning("尚未鎖定", "請先鎖定目標視窗。")
+            return
+        hwnd = self.wm.get_handle(self.locked_title)
+        try:
+            frame = win32_backend.capture_window(hwnd) if hwnd else None
+        except Exception as exc:
+            messagebox.showerror("背景擷取失敗", str(exc))
+            return
+        if frame is None:
+            messagebox.showerror(
+                "背景擷取不相容",
+                "沒有取得有效畫面。這個程式可能使用 DirectX 獨佔畫面或受保護渲染；請改用前景模式。",
+            )
+            return
+        height, width = frame.shape[:2]
+        messagebox.showinfo("背景擷取成功", f"成功取得 {width} × {height} 畫面。\n仍需實際測試遊戲是否接受背景輸入。")
 
     def refresh_status(self):
         self.status_label.config(text=self._status_text())
