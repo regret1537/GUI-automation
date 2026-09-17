@@ -61,16 +61,21 @@ class WindowManager:
     def _find(self, title_substring: str):
         if not WINDOW_MGMT_AVAILABLE or not title_substring:
             return None
+        # 直接比對 getAllWindows() 的實際標題最穩定；遊戲標題常包含 []、
+        # 括號或破折號，部分 pywinctl 版本的 getWindowsWithTitle 會把它們
+        # 當成搜尋語法，導致「列表看得到、鎖定卻找不到」。
         try:
-            candidates = pywinctl.getWindowsWithTitle(
-                title_substring, condition=pywinctl.Re.CONTAINS
-            )
-        except TypeError:
-            # 舊版 pywinctl 可能不支援 condition 參數，退回手動過濾
-            try:
-                candidates = [w for w in pywinctl.getAllWindows() if title_substring in (w.title or "")]
-            except Exception:
-                candidates = []
+            needle = title_substring.strip().casefold()
+            exact = []
+            contains = []
+            for win in pywinctl.getAllWindows():
+                title = (getattr(win, "title", "") or "").strip()
+                folded = title.casefold()
+                if folded == needle:
+                    exact.append(win)
+                elif needle in folded:
+                    contains.append(win)
+            candidates = exact or contains
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"_find 失敗: {e}")
@@ -81,6 +86,12 @@ class WindowManager:
         """回傳 (x, y, width, height)，找不到視窗回傳 None。"""
         win = self._find(title_substring)
         if win is None:
+            return None
+        try:
+            return (int(win.left), int(win.top), int(win.width), int(win.height))
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"get_rect 讀取屬性失敗: {e}")
             return None
 
     def get_handle(self, title_substring: str) -> Optional[int]:
@@ -106,12 +117,6 @@ class WindowManager:
             return bool(win.isMinimized)
         except Exception:
             return False
-        try:
-            return (int(win.left), int(win.top), int(win.width), int(win.height))
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"get_rect 讀取屬性失敗: {e}")
-            return None
 
     def is_alive(self, title_substring: str) -> bool:
         return self.get_rect(title_substring) is not None
